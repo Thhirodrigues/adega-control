@@ -1,6 +1,216 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+<!-- Playables SDK -->
+<script>// Playables SDK v1.0.0
+// Game lifecycle bridge: rAF-based game-ready detection + event communication
+(function() {
+  'use strict';
+
+  // Idempotency: skip if already initialized (e.g., server-side injection
+  // followed by client-side inject-javascript via the Bloks webview component).
+  if (window.playablesSDK) return;
+
+  var HANDLER_NAME = 'playablesGameEventHandler';
+  var ANDROID_BRIDGE_NAME = '_MetaPlayablesBridge';
+  var RAF_FRAME_THRESHOLD = 3;
+
+  var gameReadySent = false;
+  var firstInteractionSent = false;
+  var errorSent = false;
+  var frameCount = 0;
+  var originalRAF = window.requestAnimationFrame;
+
+  // --- Transport Layer ---
+
+  function hasIOSBridge() {
+    return !!(window.webkit &&
+              window.webkit.messageHandlers &&
+              window.webkit.messageHandlers[HANDLER_NAME]);
+  }
+
+  function hasAndroidBridge() {
+    return !!(window[ANDROID_BRIDGE_NAME] &&
+              typeof window[ANDROID_BRIDGE_NAME].postEvent === 'function');
+  }
+
+  function isInIframe() {
+    return !!(window.parent && window.parent !== window);
+  }
+
+  function sendEvent(eventName, payload) {
+    var message = {
+      type: eventName,
+      payload: payload || {},
+      timestamp: Date.now()
+    };
+
+    if (hasIOSBridge()) {
+      try {
+        window.webkit.messageHandlers[HANDLER_NAME].postMessage(message);
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    if (hasAndroidBridge()) {
+    try {
+      var p = payload || {};
+      p.__secureToken = window.__fbAndroidBridgeAuthToken || '';
+      p.timestamp = message.timestamp;
+      window[ANDROID_BRIDGE_NAME].postEvent(
+        eventName,
+        JSON.stringify(p)
+      );
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+    if (isInIframe()) {
+      try {
+        window.parent.postMessage(message, '*');
+      } catch (e) { /* ignore */ }
+      return;
+    }
+  }
+
+  // --- rAF Game-Ready Detection ---
+
+  function onFrame() {
+    if (gameReadySent) return;
+
+    frameCount++;
+    if (frameCount >= RAF_FRAME_THRESHOLD) {
+      gameReadySent = true;
+      sendEvent('game_ready', {
+        frame_count: frameCount,
+        detected_at: Date.now()
+      });
+      return;
+    }
+
+    originalRAF.call(window, onFrame);
+  }
+
+  if (originalRAF) {
+    window.requestAnimationFrame = function(callback) {
+      if (!gameReadySent) {
+        return originalRAF.call(window, function(timestamp) {
+          frameCount++;
+          if (frameCount >= RAF_FRAME_THRESHOLD && !gameReadySent) {
+            gameReadySent = true;
+            sendEvent('game_ready', {
+              frame_count: frameCount,
+              detected_at: Date.now()
+            });
+          }
+          callback(timestamp);
+        });
+      }
+      return originalRAF.call(window, callback);
+    };
+  }
+
+  // --- First User Interaction Detection ---
+
+  function setupFirstInteractionDetection() {
+    var events = ['touchstart', 'mousedown', 'keydown'];
+
+    function onFirstInteraction() {
+      if (firstInteractionSent) return;
+      firstInteractionSent = true;
+      sendEvent('user_interaction_start', null);
+
+      for (var i = 0; i < events.length; i++) {
+        document.removeEventListener(events[i], onFirstInteraction, true);
+      }
+    }
+
+    for (var i = 0; i < events.length; i++) {
+      document.addEventListener(events[i], onFirstInteraction, true);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupFirstInteractionDetection);
+  } else {
+    setupFirstInteractionDetection();
+  }
+
+  // --- Auto Error Capture ---
+
+  window.addEventListener('error', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    sendEvent('error', {
+      message: event.message || 'Unknown error',
+      source: event.filename || '',
+      lineno: event.lineno || 0,
+      colno: event.colno || 0,
+      auto_captured: true
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    var reason = event.reason;
+    sendEvent('error', {
+      message: (reason instanceof Error) ? reason.message : String(reason),
+      type: 'unhandled_promise_rejection',
+      auto_captured: true
+    });
+  });
+
+  // --- Public API ---
+
+  window.playablesSDK = {
+    complete: function(score) {
+      sendEvent('game_ended', {
+        score: score,
+        completed: true
+      });
+    },
+
+    error: function(message) {
+      if (errorSent) return;
+      errorSent = true;
+      sendEvent('error', {
+        message: message || 'Unknown error',
+        auto_captured: false
+      });
+    },
+
+    sendEvent: function(eventName, payload) {
+      if (!eventName || typeof eventName !== 'string') return;
+      sendEvent(eventName, payload);
+    }
+  };
+
+  // Kick off rAF detection in case no game code calls rAF immediately
+  if (originalRAF) {
+    originalRAF.call(window, onFrame);
+  }
+})();</script>
+<!-- PLAYABLE_TOUCH_PATCH_V1 --><script>
+(function() {
+  if (window.__playableTouchPatchInstalled) return;
+  window.__playableTouchPatchInstalled = true;
+  var origAdd = EventTarget.prototype.addEventListener;
+  var blockedTypes = { touchstart: 1, touchmove: 1, wheel: 1 };
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (blockedTypes[type]) {
+      if (options === undefined || options === null) {
+        options = { passive: true };
+      } else if (typeof options === 'boolean') {
+        options = { capture: options, passive: true };
+      } else {
+        options = Object.assign({}, options, { passive: true });
+      }
+    }
+    return origAdd.call(this, type, listener, options);
+  };
+})();
+</script><script>window.Intl=window.Intl||{};Intl.t=function(s){return(Intl._locale&&Intl._locale[s])||s;};</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>Adega Control v6 - GitHub Pages</title>
@@ -42,9 +252,9 @@ button:active{transform:scale(.98)}
         <p class="font-bold text-sky-700 mb-1">Como usar (100% offline após carregar):</p>
         <ol class="list-decimal ml-4 space-y-0.5">
           <li><b>HTTPS ativo no GitHub Pages</b> → câmera funciona. Se testar local, use <code>https</code>.</li>
-          <li><b>Botão 1</b> escaneia EAN-13 com <i>html5-qrcode</i>. Sem câmera? Use "Foto do código".</li>
+          <li><b>Botão 1</b> escaneia GTIN/EAN-13 com <i>html5-qrcode</i>. Sem câmera? Use "Foto do código".</li>
           <li><b>Botão 2</b> faz OCR do rótulo com Tesseract.js (pt+en).</li>
-          <li><b>Botão 3</b> busca EAN de teste <b>0798190225388</b> (Xeque Mate) no BrasilAPI e OpenFoodFacts.</li>
+          <li><b>Botão 3</b> busca GTIN de teste <b>0798190225388</b> (Xeque Mate) em 4 bases globais.</li>
           <li>Dados salvos em <code>localStorage</code> chave <b>adega_v6</b>.</li>
         </ol>
         <div id="secureBadge" class="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full"></div>
@@ -141,8 +351,25 @@ button:active{transform:scale(.98)}
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div><label class="text-xs font-bold text-slate-500">Marca</label><input id="f_marca" class="w-full px-3 py-2.5 rounded-xl border-2 border-sky-100"></div>
-        <div><label class="text-xs font-bold text-slate-500">Tipo</label><input id="f_tipo" class="w-full px-3 py-2.5 rounded-xl border-2 border-sky-100"></div>
+        <div><label class="text-xs font-bold text-slate-500">Tipo</label><input id="f_tipo" list="tipos" class="w-full px-3 py-2.5 rounded-xl border-2 border-sky-100"></div>
       </div>
+      <datalist id="tipos">
+        <option value="Gin">
+        <option value="Vodka">
+        <option value="Whisky">
+        <option value="Cachaça">
+        <option value="Rum">
+        <option value="Tequila">
+        <option value="Cerveja">
+        <option value="Vinho">
+        <option value="Espumante">
+        <option value="Coquetel Alcoólico">
+        <option value="Licor">
+        <option value="Energético">
+        <option value="Refrigerante">
+        <option value="Água">
+        <option value="Suco">
+      </datalist>
       <div class="grid grid-cols-3 gap-3">
         <div><label class="text-xs font-bold text-slate-500">Volume</label><input id="f_volume" class="w-full px-3 py-2.5 rounded-xl border-2 border-sky-100"></div>
         <div><label class="text-xs font-bold text-slate-500">Teor</label><input id="f_teor" class="w-full px-3 py-2.5 rounded-xl border-2 border-sky-100"></div>
@@ -161,6 +388,20 @@ button:active{transform:scale(.98)}
       </div>
       <p id="f_origem" class="text-[11px] text-slate-400 text-center"></p>
     </form>
+    <datalist id="tipos">
+      <option value="Gin">
+      <option value="Vodka">
+      <option value="Whisky">
+      <option value="Cerveja">
+      <option value="Coquetel Alcoólico">
+      <option value="Cachaça">
+      <option value="Rum">
+      <option value="Tequila">
+      <option value="Vinho">
+      <option value="Energético">
+      <option value="Refrigerante">
+      <option value="Água">
+    </datalist>
   </section>
 
   <!-- ESTOQUE -->
@@ -215,220 +456,5 @@ function initDB(){
       id:'xm-'+Date.now(),
       ean:'0798190225388',
       nome:'Xeque Mate',
-      marca:'Cervisia',
-      tipo:'Coquetel Alcoólico Composto',
-      volume:'1 L',
-      teor:'13,9% vol',
-      estoque:12,
-      preco:22.9,
-      foto:'',
-      origem:'Pré-cadastrado • BrasilAPI',
-      atualizado:new Date().toISOString()
-    });
-    saveDB();
-  }
-}
-
-// SECURE CHECK
-(function(){
-  const b=$('#secureBadge');
-  if(window.isSecureContext){
-    b.className+=' bg-emerald-500 text-white'; b.innerHTML='<i class="ri-shield-check-fill"></i> HTTPS seguro';
-  }else{
-    b.className+=' bg-amber-500 text-white'; b.innerHTML='<i class="ri-alert-fill"></i> Sem HTTPS - use foto';
-    $('#secureWarn').classList.remove('hidden');
-    $('#secureWarn').innerHTML='<i class="ri-error-warning-fill"></i> Câmera bloqueada sem HTTPS. Use "Foto do código" ou publique no GitHub Pages.';
-  }
-})();
-
-// SCANNER
-async function abrirScanner(){
-  show('#sec-scanner');
-  if(!window.isSecureContext){ $('#reader').innerHTML='<div class="p-6 text-center">Sem HTTPS. Toque em "Foto".</div>'; return; }
-  if(!html5Qr) html5Qr = new Html5Qrcode('reader', {verbose:false});
-  try{
-    cameras = await Html5Qrcode.getCameras();
-    cameraId = cameras.find(c=>/back|trase|environment/i.test(c.label))?.id || cameras[0]?.id;
-    await html5Qr.start(cameraId, { fps:10, qrbox:{width:280,height:140}, aspectRatio:1.777 }, onScan, ()=>{});
-  }catch(e){ $('#reader').innerHTML='<div class="p-6 text-center text-rose-300">Erro câmera: '+e+'</div>'; }
-}
-function onScan(dec){ fecharScanner(); navigator.vibrate?.(80); toast('Código: '+dec); buscarEAN(dec); }
-async function fecharScanner(){ try{ if(html5Qr && html5Qr.isScanning) await html5Qr.stop(); }catch{} }
-async function trocarCamera(){ if(cameras.length<2) return toast('Só 1 câmera'); await fecharScanner(); cameraId = cameras.find(c=>c.id!==cameraId)?.id; abrirScanner(); }
-
-// FILE SCAN FALLBACK
-$('#scanFile').onchange = async e=>{
-  const file=e.target.files[0]; if(!file) return;
-  toast('Lendo imagem...');
-  try{
-    const temp = new Html5Qrcode('reader-file');
-    const dec = await temp.scanFile(file, true);
-    buscarEAN(dec);
-  }catch{ toast('Não achei código. Tente OCR'); document.getElementById('ocrFile').click(); }
-};
-
-// OCR
-$('#ocrFile').onchange = async e=>{
-  const file=e.target.files[0]; if(!file) return;
-  $('#ocrModal').classList.remove('hidden'); $('#ocrModal').style.display='grid';
-  $('#ocrText').textContent=''; $('#ocrProgress').textContent='0%';
-  try{
-    const { data:{ text } } = await Tesseract.recognize(file, 'por+eng', {
-      logger:m=>{ if(m.progress) $('#ocrProgress').textContent = Math.round(m.progress*100)+'% '+m.status; }
-    });
-    $('#ocrText').textContent = text;
-    const eans = text.match(/\b\d{8,14}\b/g) || [];
-    if(eans.length){ toast('EAN encontrado: '+eans[0]); fecharOCR(); buscarEAN(eans[0]); }
-    else{
-      $('#ocrProgress').textContent='Sem EAN. Copie o nome e busque.';
-      // tenta extrair nome
-      const nome = text.split('\n').filter(l=>l.length>3)[0]||'';
-      if(nome) { setTimeout(()=>{ fecharOCR(); abrirForm({nome}); },800); }
-    }
-  }catch(err){ toast('Erro OCR'); }
-};
-function fecharOCR(){ $('#ocrModal').classList.add('hidden'); $('#ocrModal').style.display='none'; }
-
-// BUSCAR EAN
-async function buscarEAN(raw){
-  const ean = String(raw).replace(/\D/g,'').slice(0,14);
-  if(ean.length<8){ toast('EAN inválido'); return; }
-  $('#inpEan').value = ean;
-  toast('Buscando '+ean+'...');
-  show('#sec-form'); // abre form já
-
-  let prod = db.find(p=>p.ean===ean);
-  if(prod){ abrirForm(prod); return; }
-
-  let dados = { ean, nome:'', marca:'', tipo:'Bebida', volume:'', teor:'', estoque:1, preco:0, foto:'', origem:'' };
-
-  // Xeque Mate hardcoded
-  if(ean==='0798190225388'){
-    dados = {...dados, nome:'Xeque Mate', marca:'Cervisia', tipo:'Coquetel Alcoólico', volume:'1000 ml', teor:'13,9%', origem:'Pré-cadastro'};
-  }
-
-  // BrasilAPI
-  try{
-    const r = await fetch(`https://brasilapi.com.br/api/gtin/v1/${ean}`);
-    if(r.ok){
-      const j = await r.json();
-      const p = j.product || j;
-      if(p){
-        dados.nome = p.name || p.description || dados.nome;
-        dados.marca = p.brand || p.brand_name || dados.marca;
-        dados.tipo = p.type || dados.tipo;
-        dados.origem = (dados.origem?dados.origem+' + ':'') + 'BrasilAPI';
-      }
-    }
-  }catch{}
-
-  // OpenFoodFacts
-  try{
-    const r2 = await fetch(`https://world.openfoodfacts.org/api/v0/product/${ean}.json`);
-    if(r2.ok){
-      const j2 = await r2.json();
-      if(j2.status===1){
-        const p=j2.product;
-        dados.nome = p.product_name_pt || p.product_name || dados.nome;
-        dados.marca = p.brands || dados.marca;
-        dados.volume = p.quantity || dados.volume;
-        dados.foto = p.image_front_small_url || p.image_url || dados.foto;
-        dados.tipo = p.categories_tags?.[0]?.replace('en:','') || dados.tipo;
-        dados.origem = (dados.origem?dados.origem+' + ':'') + 'OpenFoodFacts';
-      }
-    }
-  }catch{}
-
-  abrirForm(dados);
-}
-
-// FORM
-function abrirForm(d={}){
-  show('#sec-form');
-  $('#formTitle').textContent = d.id ? 'Editar' : 'Novo Produto';
-  $('#f_id').value = d.id || '';
-  $('#f_ean').value = d.ean || '';
-  $('#f_nome').value = d.nome || '';
-  $('#f_marca').value = d.marca || '';
-  $('#f_tipo').value = d.tipo || '';
-  $('#f_volume').value = d.volume || '';
-  $('#f_teor').value = d.teor || '';
-  $('#f_estoque').value = d.estoque ?? 1;
-  $('#f_preco').value = d.preco ?? 0;
-  $('#f_origem').textContent = d.origem || '';
-  if(d.foto){ $('#f_preview').src=d.foto; $('#f_preview').classList.remove('hidden'); } else $('#f_preview').classList.add('hidden');
-}
-$('#f_foto').onchange = e=>{
-  const f=e.target.files[0]; if(!f) return;
-  const rd=new FileReader(); rd.onload=()=>{ $('#f_preview').src=rd.result; $('#f_preview').classList.remove('hidden'); }; rd.readAsDataURL(f);
-};
-$('#frm').onsubmit = e=>{
-  e.preventDefault();
-  const id=$('#f_id').value || 'p-'+Date.now();
-  const obj = {
-    id,
-    ean:$('#f_ean').value.trim(),
-    nome:$('#f_nome').value.trim(),
-    marca:$('#f_marca').value.trim(),
-    tipo:$('#f_tipo').value.trim(),
-    volume:$('#f_volume').value.trim(),
-    teor:$('#f_teor').value.trim(),
-    estoque:parseInt($('#f_estoque').value)||0,
-    preco:parseFloat($('#f_preco').value)||0,
-    foto:$('#f_preview').src.startsWith('data:')?$('#f_preview').src:($('#f_preview').src||''),
-    origem:$('#f_origem').textContent,
-    atualizado:new Date().toISOString()
-  };
-  const i=db.findIndex(p=>p.id===id);
-  if(i>=0) db[i]=obj; else db.unshift(obj);
-  saveDB(); toast('Salvo!'); abrirEstoque();
-};
-function excluirProduto(){
-  const id=$('#f_id').value; if(!id) return voltarHome();
-  if(!confirm('Excluir?')) return;
-  db=db.filter(p=>p.id!==id); saveDB(); toast('Excluído'); abrirEstoque();
-}
-
-// ESTOQUE
-function renderEstoque(q=''){
-  const wrap=$('#listaEstoque'); const term=q.toLowerCase();
-  const list = db.filter(p=>!term || (p.nome+p.marca+p.ean).toLowerCase().includes(term));
-  if(!list.length){ wrap.innerHTML='<div class="text-center text-slate-500 py-10">Vazio. Use os botões da Home.</div>'; return; }
-  wrap.innerHTML = list.map(p=>`
-    <div class="flex items-center gap-3 p-3 rounded-2xl border border-sky-100 hover:bg-sky-50">
-      <div class="w-14 h-14 rounded-xl bg-sky-100 grid place-items-center overflow-hidden">
-        ${p.foto?`<img src="${p.foto}" class="w-full h-full object-cover">`:`<i class="ri-wine-line text-2xl text-sky-600"></i>`}
-      </div>
-      <div class="flex-1 min-w-0">
-        <p class="font-bold truncate">${p.nome||'Sem nome'}</p>
-        <p class="text-xs text-slate-500 truncate">${p.marca||''} • ${p.volume||''} ${p.teor? '• '+p.teor:''}</p>
-        <p class="text-[11px] font-mono text-sky-700">${p.ean}</p>
-      </div>
-      <div class="text-center">
-        <p class="text-[11px] text-slate-500">ESTOQUE</p>
-        <p class="font-extrabold text-xl leading-none text-slate-800">${p.estoque}</p>
-        <div class="flex gap-1 mt-1">
-          <button onclick="ajustar('${p.id}',-1)" class="w-7 h-7 rounded-lg bg-slate-200">-</button>
-          <button onclick="ajustar('${p.id}',1)" class="w-7 h-7 rounded-lg bg-sky-600 text-white">+</button>
-        </div>
-      </div>
-      <button onclick='abrirForm(${JSON.stringify(p).replace(/'/g,"&#39;")})' class="w-9 h-9 grid place-items-center rounded-xl bg-slate-100 hover:bg-slate-200"><i class="ri-edit-line"></i></button>
-    </div>
-  `).join('');
-}
-function ajustar(id,delta){ const p=db.find(x=>x.id===id); if(!p) return; p.estoque=Math.max(0,p.estoque+delta); p.atualizado=new Date().toISOString(); saveDB(); renderEstoque($('#buscaEstoque').value); }
-
-// EXPORT
-function exportar(){
-  const blob = new Blob([JSON.stringify(db,null,2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download='adega_v6.json'; a.click(); URL.revokeObjectURL(url);
-  toast('Backup baixado');
-}
-
-// INIT
-window.addEventListener('DOMContentLoaded', ()=>{ initDB(); renderEstoque(); });
-window.addEventListener('beforeunload', fecharScanner);
-</script>
-</body>
-</html>
+      marca:'Cervejaa',
+          
